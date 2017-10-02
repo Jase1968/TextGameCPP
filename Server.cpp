@@ -5,8 +5,8 @@
 #include <string>
 #include <thread>
 #include <mutex>
-
-#include "CBLib.hpp"
+#include <memory>
+#include <list>
 
 // SERVER
 
@@ -20,7 +20,7 @@ void writeToConsole(const std::string& text, bool newLine = true)
 
 	std::cout << text;
 	if (newLine)
-		std::cout<< std::endl;
+		std::cout << std::endl;
 }
 
 
@@ -30,30 +30,36 @@ public:
 	Chat() :
 		port(40000),
 		connections(0),
+		maxConnections(10),
 		threadListener(&Chat::listenToClients, this),
 		threadSend(&Chat::updateSending, this)
-
 	{
 		ip = sf::IpAddress::getLocalAddress();
 		if (listener.listen(port) != sf::Socket::Done)
 			return;
+		selector.add(listener);
 		writeToConsole("Server is listening to: " + std::to_string(port));
-		startListening = true; 
+		startListening = true;
 		startSending = true;
 	}
-	~Chat(){
-	}
+	~Chat() {}
 
 	void update()
 	{
 		// receiving clients message
 		while (true)
 		{
-			std::size_t received = 0;
-			client.receive(buffer, sizeof(buffer), received);
-			if (received > 0)
+			for (std::list<std::unique_ptr<sf::TcpSocket>>::iterator it = clients.begin(); it != clients.end(); ++it)
 			{
-				writeToConsole("(" + client.getRemoteAddress().toString() + "):" + buffer);
+				std::size_t received = 0;
+				char* tbuffer = new char[100];
+				(*it)->receive(tbuffer, maxMessageSize, received);
+				buffer = tbuffer;
+				if (received > 0)
+				{
+					writeToConsole("(" + (*it)->getRemoteAddress().toString() + "):" + buffer);
+				}
+				delete[] tbuffer;
 			}
 		}
 	}
@@ -64,9 +70,12 @@ public:
 		{
 			if (startSending)
 			{
-				std::string output = "this sending";
-				if (client.send(output.c_str(), output.size() + 1) == sf::Socket::Done)
-					startSending = false;
+				for (std::list<std::unique_ptr<sf::TcpSocket>>::iterator it = clients.begin(); it != clients.end(); ++it)
+				{
+					std::string output = "this sending123";
+					if ((*it)->send(output.c_str(), output.size() + 1) == sf::Socket::Done)
+						startSending = false;
+				}
 			}
 		}
 	}
@@ -77,13 +86,54 @@ public:
 		{
 			if (startListening)
 			{
-				writeToConsole("wait for connections");
-				if (listener.accept(client) == sf::Socket::Done)
+				// waiting for data on sockets
+				writeToConsole("waiting for new connections...");
+				if (selector.wait())
 				{
-					writeToConsole("client connected (" + client.getRemoteAddress().toString() + ")");
+					if (selector.isReady(listener))
+					{
+						std::unique_ptr<sf::TcpSocket> client = std::make_unique<sf::TcpSocket>();
+						if (listener.accept(*client) == sf::Socket::Done)
+						{
+							writeToConsole("client connected (" + client->getRemoteAddress().toString() + ")");
 
-					std::string output = "You connected to port: " + ip.toString();
-					client.send(output.c_str(), output.size() + 1);
+							std::string output = "You connected to port: " + ip.toString();
+							client->send(output.c_str(), output.size() + 1);
+
+							// add new client
+							clients.push_back(std::move(client));
+							selector.add(*clients.back());
+						}
+					}
+					else
+					{
+						for (std::list<std::unique_ptr<sf::TcpSocket>>::iterator it = clients.begin(); it != clients.end(); ++it)
+						{
+							sf::TcpSocket& client = **it;
+							// client sent data
+							if (selector.isReady(client))
+							{
+								std::size_t received = 0;
+								char* tbuffer = new char[100];
+								(*it)->receive(tbuffer, maxMessageSize, received);
+								buffer = tbuffer;
+								if (received > 0)
+								{
+									writeToConsole("(" + (*it)->getRemoteAddress().toString() + "):" + buffer);
+								}
+
+								//sf::Packet packet;
+
+								//if (client.receive(packet) == sf::Socket::Done)
+								//{
+								//	packet >> buffer;
+								//	writeToConsole(buffer);
+								//}
+								delete[] tbuffer;
+							}
+
+						}
+					}
 				}
 			}
 		}
@@ -93,14 +143,18 @@ public:
 private:
 	std::string chatLog;
 	sf::TcpListener listener;
-	sf::TcpSocket client;
+	sf::SocketSelector selector;
+	std::list<std::unique_ptr<sf::TcpSocket>> clients;
 	sf::IpAddress ip;
-	int connections; 
+	unsigned short connections;
+	unsigned short maxConnections;
+
 	bool startListening{ false };
 	bool startSending{ false };
 
-	char buffer[100];
+	std::string buffer;
 	unsigned short port;
+	const unsigned int maxMessageSize = 100;
 
 	std::thread threadListener, threadSend, threadReceive;
 };

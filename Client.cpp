@@ -44,8 +44,8 @@ public:
 		do
 		{
 			writeToConsole(ipAddress.getLocalAddress().toString());
-			writeToConsole("Enter ip adress of the server");
-			std::cin >> ipAddress;
+			//writeToConsole("Enter ip adress of the server");
+			//std::cin >> ipAddress;
 			ipAddress = ipAddress.getLocalAddress();
 			if (client.connect(ipAddress, port) != sf::Socket::Status::Done)
 			{
